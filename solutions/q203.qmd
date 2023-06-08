@@ -1,0 +1,84 @@
+---
+title: "q203"
+format: html
+editor: visual
+---
+
+```{r}
+# load packages
+library(tidyr)
+library(dplyr)
+library(lubridate)
+library(readstata13)
+library(ExclusionTable)
+library(relsurv)
+
+colon <- biostat3::colon
+popmort  <- read.dta13("../data/popmort.dta")
+```
+
+```{r}
+#| output: asis
+# Limit to patient inside period window (01jan1994-31dec1995)
+exl_tbl <- 
+  exclusion_table(colon,
+                  exclusion_criteria = c("ymd(dx)   > ymd('1995-12-31')",
+                                         "ymd(exit) < ymd('1994-01-01')"))
+
+# Set up survival time and failure variable
+colon <- exl_tbl$dataset
+
+st_colon <- colon %>% 
+  mutate(
+    # Create variables for survival analysis
+    entry_dt = pmax(dx  , ymd('1994-01-01')),
+    exit_dt  = pmin(exit, ymd('1995-12-31')),
+    st_entry = pmax(0, time_length(dx %--% entry_dt, 
+                                   unit = "days")),
+    st_exit  = st_entry + time_length(entry_dt %--% exit_dt, 
+                                      unit = "days"),
+    failure  = if_else(grepl("Dead", status) & exit == exit_dt, 1, 0),
+    
+    # Create variables for merging with popmort file 
+    female = as.numeric(sex == 2),
+    att_age  = pmin(floor(age + st_exit), 99),
+    att_year = floor(yydx + st_exit)
+  )
+```
+
+```{r}
+# Prepare popmort file
+popmort_wide <- pivot_wider(popmort,
+                            id_cols = c("sex", "_age"),
+                            names_from  = "_year",
+                            values_from = "prob")
+
+popmort_males <- popmort_wide %>% 
+  filter(sex == 1)            %>% 
+  select(-c("sex", "_age"))   %>% 
+  as.matrix()
+
+popmort_females <- popmort_wide %>% 
+  filter(sex == 2)              %>% 
+  select(-c("sex", "_age"))     %>% 
+  as.matrix()
+
+ratetable <- transrate(popmort_males,
+                       popmort_females,
+                       yearlim = c(1951, 2000),
+                       int.length = 1)
+```
+
+```{r}
+PP_survfit <- rs.surv(Surv(st_entry, st_exit, failure, 
+                           type = "counting") ~ 1,
+                      data      = st_colon,
+                      ratetable = ratetable,
+                      method    = "ederer2",
+                      rmap      = list(age  = att_age * 365.24,
+                                       year = att_year))
+```
+
+```{r}
+plot(PP_survfit)
+```
