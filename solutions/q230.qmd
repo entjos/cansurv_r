@@ -1,0 +1,245 @@
+---
+title: "q230"
+format: html
+editor: visual
+---
+
+```{r}
+# load packages
+library(rstpm2)
+library(dplyr)
+library(ggplot2)
+library(fastDummies)
+library(readstata13)
+
+melanoma <- biostat3::melanoma
+popmort  <- read.dta13("../data/popmort.dta")
+```
+
+```{r}
+# Set up survival time
+melanoma <- melanoma %>% 
+  mutate(st_years = pmin(surv_mm /12, 10), # Limit follow-up to max 10 years
+         failure  = if_else(grepl("Dead", status) & surv_mm < 120, 1, 0),
+         att_age  = pmin(floor(age + st_years), 99),
+         att_year = floor(yydx + st_years),
+         female   = as.numeric(sex == "Female"),
+         sex      = NULL)
+
+popmort <- popmort %>% 
+  mutate(female = as.numeric(sex == 2),
+         sex    = NULL)
+
+# merge with popmort file
+melanoma <- melanoma %>% 
+  left_join(popmort,
+            by = c("female",
+                   att_age  = "_age",
+                   att_year = "_year"))
+
+# Check failure indicator
+table(melanoma$status, melanoma$failure)
+```
+
+```{r}
+model_1 <- stpm2(Surv(st_years, failure) ~ 1,
+                 df      = 3,
+                 bhazard = "rate",
+                 data    = melanoma)
+
+haz_1 <- predict(model_1,
+                 type         = "hazard",
+                 type.relsurv = "excess",
+                 newdata      = melanoma,
+                 se.fit       = TRUE,
+                 full         = TRUE)
+
+surv_1 <- predict(model_1,
+                 type         = "surv",
+                 type.relsurv = "excess",
+                 newdata      = melanoma,
+                 se.fit       = TRUE,
+                 full         = TRUE)
+
+```
+
+```{r}
+ggplot(haz_1,
+       aes(x = st_years,
+           y = Estimate * 1000)) + 
+  geom_line() +
+  geom_ribbon(aes(ymin = lower * 1000,
+                  ymax = upper * 1000),
+              alpha = 0.2) +
+  labs(y = "Excess hazard",
+       x = "Time since diagnosis (years)")
+```
+
+```{r}
+ggplot(surv_1,
+       aes(x = st_years,
+           y = Estimate)) + 
+  geom_line() +
+  geom_ribbon(aes(ymin = lower,
+                  ymax = upper),
+              alpha = 0.2) +
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(y = "Net survival",
+       x = "Time since diagnosis (years)")
+```
+
+```{r}
+model_2 <- stpm2(Surv(st_years, failure) ~ agegrp + female + year8594,
+                 df      = 3,
+                 bhazard = "rate",
+                 data    = melanoma)
+
+haz_2 <- predict(model_2,
+                 type         = "hazard",
+                 type.relsurv = "excess",
+                 newdata      = melanoma,
+                 se.fit       = TRUE,
+                 full         = TRUE)
+
+surv_2 <- predict(model_2,
+                  type         = "surv",
+                  type.relsurv = "excess",
+                  newdata      = melanoma,
+                  se.fit       = TRUE,
+                  full         = TRUE)
+```
+
+```{r}
+ggplot(filter(haz_2, female == 0 & year8594 == "Diagnosed 85-94"),
+       aes(x = st_years,
+           y = Estimate * 1000,
+           colour = agegrp,
+           group  = agegrp)) +
+  geom_line() +
+  labs(y = "Excess hazard per 1,000 psy",
+       x = "Time since diagnosis (years)",
+       colour = "Age groups")
+```
+
+```{r}
+ggplot(filter(surv_2, female == 0 & year8594 == "Diagnosed 85-94"),
+       aes(x = st_years,
+           y = Estimate,
+           colour = agegrp,
+           group  = agegrp)) +
+  geom_line() +
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(y = "Net survival",
+       x = "Time since diagnosis (years)",
+       colour = "Age groups")
+```
+
+```{r}
+# Create dummies for agegrp
+melanoma <- melanoma %>% 
+  mutate(agegrp_n = as.numeric(agegrp))
+
+melanoma <- dummy_columns(melanoma, "agegrp_n")
+
+model_3 <- stpm2(Surv(st_years, failure) ~ agegrp_n_2 + 
+                   agegrp_n_3 + 
+                   agegrp_n_4 +
+                   female   + 
+                   year8594,
+                 df      = 3,
+                 tvc     = list(agegrp_n_2 = 2,
+                                agegrp_n_3 = 2,
+                                agegrp_n_4 = 2),
+                 bhazard = "rate",
+                 data    = melanoma)
+```
+
+```{r}
+haz_3 <- predict(model_3,
+                 type         = "hazard",
+                 type.relsurv = "excess",
+                 newdata      = melanoma,
+                 se.fit       = TRUE,
+                 full         = TRUE)
+
+surv_3 <- predict(model_3,
+                  type         = "surv",
+                  type.relsurv = "excess",
+                  newdata      = melanoma,
+                  se.fit       = TRUE,
+                  full         = TRUE)
+```
+
+```{r}
+ggplot(filter(haz_3, female == 0 & year8594 == "Diagnosed 85-94"),
+       aes(x = st_years,
+           y = Estimate * 1000,
+           colour = agegrp,
+           group  = agegrp)) +
+  geom_line() +
+  labs(y = "Excess hazard per 1,000 psy",
+       x = "Time since diagnosis (years)",
+       colour = "Age groups")
+```
+
+```{r}
+ggplot(filter(surv_3, female == 0 & year8594 == "Diagnosed 85-94"),
+       aes(x = st_years,
+           y = Estimate,
+           colour = agegrp,
+           group  = agegrp)) +
+  geom_line() +
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(y = "Net survival",
+       x = "Time since diagnosis (years)",
+       colour = "Age groups")
+```
+
+```{r}
+# Create a list of function for defining contrasts for HRs
+fun_list <- list(function(x){transform(x, agegrp_n_2 = 1)},
+                 function(x){transform(x, agegrp_n_3 = 1)},
+                 function(x){transform(x, agegrp_n_4 = 1)})
+
+hrs <- lapply(1:3, function(i){
+  
+  fit <- predict(model_3,
+                 type         = "hr",
+                 type.relsurv = "excess",
+                 exposed      = fun_list[[i]], # loop through function list
+                 newdata      = data.frame(female     = 0,
+                                           year8594   = "Diagnosed 85-94",
+                                           agegrp_n_2 = 0,
+                                           agegrp_n_3 = 0,
+                                           agegrp_n_4 = 0),
+                 grid         = TRUE,
+                 se.fit       = TRUE,
+                 full         = TRUE)
+  
+  # Needed for appending the different datasets for plotting
+  fit$agegrp <- i + 1
+  
+  return(fit)
+  
+})
+
+# Create one data frame out for the three seperate data frames for HRs
+hrs <- bind_rows(hrs)
+```
+
+```{r}
+
+# Improve lables
+hrs <- hrs %>% 
+  mutate(agegrp = factor(agegrp,
+                         labels = c("45-59", "60-74", "75+")))
+ggplot(hrs,
+       aes(x = st_years,
+           y = Estimate,
+           colour = agegrp,
+           group  = agegrp)) +
+  geom_line() +
+  labs(y = "Hazard ratio (reference: age group 0-44)",
+       x = "Time since diagnosis",
+       colour = "Age groups")
+```
